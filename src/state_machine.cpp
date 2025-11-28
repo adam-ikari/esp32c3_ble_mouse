@@ -19,6 +19,14 @@ extern unsigned long lastBlinkTime;
 extern bool ledState;
 extern int blinkCount;
 
+// 鼠标移动状态变量外部声明
+extern int8_t currentMomentumX;
+extern int8_t currentMomentumY;
+extern int8_t targetMomentumX;
+extern int8_t targetMomentumY;
+extern unsigned long momentumChangeTimer;
+extern unsigned int momentumChangeInterval;
+
 // 定义静态成员
 float MouseMotionEnable::angle = 0;
 
@@ -31,15 +39,21 @@ void Init::entry() {
     digitalWrite(LED_D4_PIN, LOW);
     digitalWrite(LED_D5_PIN, LOW);
     
-    // 初始化BLE将在main.cpp中完成
-    // 发送初始化完成事件
-    BleMouseState::dispatch(InitComplete());
+    // 初始化全局变量
+    deviceConnected = false;
+    buttonPressStartTime = 0;
+    lastBlinkTime = 0;
+    ledState = false;
+    blinkCount = 0;
+    
+    Serial.println("LED引脚初始化完成");
+    Serial.println("全局变量初始化完成");
+    Serial.println("等待初始化完成事件...");
 }
 
 void Init::react(InitComplete const &) {
     Serial.println("接收到初始化完成事件，检查是否需要重新连接到已配对设备");
-    // 根据README，如果设备之前连接过，应先进入Reconnect状态
-    // 这里简化处理 - 假设我们总是先尝试重新连接
+    // 根据设计，在初始化完成后先进入Reconnect状态尝试连接之前配对的设备
     transit<Reconnect>();
 }
 
@@ -49,15 +63,24 @@ void Idle::entry() {
     digitalWrite(LED_D4_PIN, LOW);
     digitalWrite(LED_D5_PIN, LOW);
     
+    // 确保设备处于可被发现状态
+    if (pServer) {
+        NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
+        if (!pAdvertising->isAdvertising()) {
+            pAdvertising->start();
+            Serial.println("启动广播，设备现在可被发现");
+        } else {
+            Serial.println("广播已在运行");
+        }
+    }
+    
     // 检查是否已有连接的设备
     if (pServer && pServer->getConnectedCount() > 0) {
         Serial.println("检测到已有连接的设备，发送DeviceConnected事件");
         BleMouseState::dispatch(DeviceConnected());
     } else {
         Serial.println("空闲状态下设备可被连接...");
-        // 检查是否有已配对的设备（可能需要稍等一下才能知道）
-        // 在BLE中，已配对的设备通常会自动尝试连接
-        Serial.println("等待已配对设备自动连接...");
+        Serial.println("等待已配对设备自动连接或新设备连接...");
     }
 }
 
@@ -104,7 +127,19 @@ void Idle::react(InitComplete const &) {
 // Reconnect状态实现
 void Reconnect::entry() {
     Serial.println("进入重连状态 - 尝试连接之前配对的设备");
+    digitalWrite(LED_D4_PIN, LOW);
+    digitalWrite(LED_D5_PIN, LOW);
     reconnectStartTime = millis();
+    
+    // 确保广播是开启的，以便已配对设备可以连接
+    if (pServer) {
+        NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
+        if (!pAdvertising->isAdvertising()) {
+            pAdvertising->start();
+            Serial.println("启动广播以等待已配对设备连接");
+        }
+    }
+    
     // 开始重连逻辑
     startReconnection();
 }
@@ -147,9 +182,26 @@ void Reconnect::checkTimeout() {
 // Pairing状态实现
 void Pairing::entry() {
     Serial.println("进入配对状态");
+    digitalWrite(LED_D4_PIN, LOW);
+    digitalWrite(LED_D5_PIN, LOW);
     pairingStartTime = millis();
     blinkCount = 0;
     lastBlinkTime = millis();
+    ledState = false;
+    
+    // 确保设备处于可被发现状态，允许新设备配对连接
+    if (pServer) {
+        NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
+        if (pAdvertising->isAdvertising()) {
+            pAdvertising->stop();
+            delay(100);
+        }
+        // 重新启动广播以允许新的配对请求
+        pAdvertising->start();
+        Serial.println("广播已启动，设备进入配对模式");
+    } else {
+        Serial.println("错误：pServer为nullptr，无法启动广播");
+    }
     
     // 重新开始BLE广播
     startPairing();
@@ -206,6 +258,17 @@ void Connected::entry() {
     digitalWrite(LED_D5_PIN, HIGH);
     // 连接后默认LED常亮，表示在Connected状态但鼠标移动功能禁用
     // 用户可以通过短按按钮切换到鼠标移动启用状态
+    
+    // 确保广播已停止，因为我们已经连接了
+    if (pServer) {
+        NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
+        if (pAdvertising->isAdvertising()) {
+            pAdvertising->stop();
+            Serial.println("设备已连接，停止广播");
+        }
+    }
+    
+    Serial.println("连接状态设置完成，鼠标移动功能当前禁用");
 }
 
 void Connected::react(BootButtonShortPress const &) {
@@ -253,8 +316,15 @@ void Connected::react(InitComplete const &) {
 // MouseMotionDisable状态实现
 void MouseMotionDisable::entry() {
     Serial.println("进入鼠标移动禁用状态");
+    // LED常亮表示已连接，但鼠标移动功能禁用
     digitalWrite(LED_D4_PIN, HIGH);
     digitalWrite(LED_D5_PIN, HIGH);
+    
+    // 确保鼠标报告不发送移动数据
+    if (inputMouse && deviceConnected) {
+        uint8_t mouseReport[4] = {0, 0, 0, 0}; // 无移动的空报告
+        inputMouse->setValue(mouseReport, sizeof(mouseReport));
+    }
 }
 
 void MouseMotionDisable::react(BootButtonShortPress const &) {
@@ -300,43 +370,22 @@ void MouseMotionDisable::react(InitComplete const &) {
 // MouseMotionEnable状态实现
 void MouseMotionEnable::entry() {
     Serial.println("进入鼠标移动启用状态");
+    // 初始化鼠标移动参数
     angle = 0;
+    // 在main.cpp中初始化了全局变量，这里可以重置为初始值
+    currentMomentumX = 0;
+    currentMomentumY = 0;
+    targetMomentumX = 0;
+    targetMomentumY = 0;
+    momentumChangeTimer = millis();
+    momentumChangeInterval = 2000; // 每2秒改变一次动量方向
+    
+    Serial.println("鼠标随机动量移动模式已启动");
 }
 
 void MouseMotionEnable::react(BootButtonShortPress const &) {
     Serial.println("在鼠标移动启用状态下短按按钮，切换到鼠标移动禁用状态");
     transit<MouseMotionDisable>();
-}
-
-void MouseMotionEnable::moveMouse() {
-    // 圆形移动模式
-    int8_t deltaX = (int8_t)(5 * cos(angle));
-    int8_t deltaY = (int8_t)(5 * sin(angle));
-    uint8_t buttons = 0;
-    
-    // 构建鼠标报告
-    uint8_t mouseReport[4] = {buttons, 0, (uint8_t)deltaX, (uint8_t)deltaY};
-    
-    if (inputMouse && deviceConnected) {
-        inputMouse->setValue(mouseReport, sizeof(mouseReport));
-        inputMouse->notify();
-    }
-    
-    angle += 0.1;
-    if (angle >= 2 * PI) {
-        angle = 0;
-    }
-}
-
-void MouseMotionEnable::updateLED() {
-    // LED D4、D5 交替闪烁，每秒2次
-    unsigned long currentTime = millis();
-    if (currentTime - lastBlinkTime >= 250) { // 每250ms切换一次
-        ledState = !ledState;
-        digitalWrite(LED_D4_PIN, ledState ? HIGH : LOW);
-        digitalWrite(LED_D5_PIN, ledState ? LOW : HIGH);
-        lastBlinkTime = currentTime;
-    }
 }
 
 namespace tinyfsm {

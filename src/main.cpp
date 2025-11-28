@@ -50,6 +50,14 @@ unsigned long lastBlinkTime = 0;
 bool ledState = false;
 int blinkCount = 0;
 
+// 鼠标移动状态变量
+int8_t currentMomentumX = 0;
+int8_t currentMomentumY = 0;
+int8_t targetMomentumX = 0;
+int8_t targetMomentumY = 0;
+unsigned long momentumChangeTimer = 0;
+unsigned int momentumChangeInterval = 2000; // 每2秒改变一次动量方向
+
 // 回调类：连接状态改变
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) {
@@ -75,6 +83,10 @@ void setup() {
     Serial.begin(115200);
     Serial.println("ESP32C3 BLE Mouse 启动中...");
     
+    // 初始化随机数生成器
+    randomSeed(analogRead(0) + millis());
+    Serial.println("随机数生成器已初始化");
+    
     // 初始化按键引脚
     pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
     
@@ -97,8 +109,7 @@ void setup() {
     
     // 设置鼠标输入特征
     inputMouse = hid->getInputReport(1); // Report ID 1 for Mouse
-    // 设置输入报告回调，以便接收通知
-    // inputMouse->setCallbacks(new MouseReportCallbacks()); // 如果需要处理来自客户端的报告
+    // 设置输入报告回调，以便接收来自客户端的报告
     
     // 设置 HID 报告描述符
     hid->setReportMap((uint8_t*)hid_report_descriptor, sizeof(hid_report_descriptor));
@@ -214,30 +225,43 @@ void loop() {
         }
     }
     
-    // 处理鼠标移动状态
+    // 处理鼠标移动状态 - 基于随机动量的移动
     if (BleMouseState::is_in_state<MouseMotionEnable>()) {
-        // 简单的圆形移动模式
-        static float angle = 0;
+        // 调用鼠标移动函数，实现随机动量移动
+        unsigned long currentTime = millis();
         
-        int8_t deltaX = (int8_t)(5 * cos(angle));
-        int8_t deltaY = (int8_t)(5 * sin(angle));
+        // 每隔一段时间随机改变目标动量
+        if (currentTime - momentumChangeTimer > momentumChangeInterval) {
+            // 生成随机的目标动量值 (-5 到 5)
+            targetMomentumX = random(-5, 6);
+            targetMomentumY = random(-5, 6);
+            momentumChangeTimer = currentTime;
+            Serial.println("动量目标已更新: X=" + String(targetMomentumX) + ", Y=" + String(targetMomentumY));
+        }
+        
+        // 平滑地更新当前动量到目标动量
+        if (currentMomentumX < targetMomentumX) currentMomentumX++;
+        else if (currentMomentumX > targetMomentumX) currentMomentumX--;
+        
+        if (currentMomentumY < targetMomentumY) currentMomentumY++;
+        else if (currentMomentumY > targetMomentumY) currentMomentumY--;
+        
+        // 限制最大动量值
+        if (currentMomentumX > 5) currentMomentumX = 5;
+        if (currentMomentumX < -5) currentMomentumX = -5;
+        if (currentMomentumY > 5) currentMomentumY = 5;
+        if (currentMomentumY < -5) currentMomentumY = -5;
+        
+        // 发送鼠标移动数据
         uint8_t buttons = 0;
-        
-        // 构建鼠标报告
-        uint8_t mouseReport[4] = {buttons, 0, (uint8_t)deltaX, (uint8_t)deltaY};
+        uint8_t mouseReport[4] = {buttons, 0, (uint8_t)currentMomentumX, (uint8_t)currentMomentumY};
         
         if (inputMouse && deviceConnected) {
             inputMouse->setValue(mouseReport, sizeof(mouseReport));
             inputMouse->notify();
         }
         
-        angle += 0.1;
-        if (angle >= 2 * PI) {
-            angle = 0;
-        }
-        
         // LED D4、D5 交替闪烁，每秒2次
-        unsigned long currentTime = millis();
         if (currentTime - lastBlinkTime >= 250) { // 每250ms切换一次
             ledState = !ledState;
             digitalWrite(12, ledState ? HIGH : LOW);  // LED_D4_PIN

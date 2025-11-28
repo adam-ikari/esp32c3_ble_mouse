@@ -109,7 +109,5 @@ private:
 public:
     void entry() override;
     void react(BootButtonShortPress const &) override;
-    void moveMouse();
-    void updateLED();
 };
 
