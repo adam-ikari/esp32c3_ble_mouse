@@ -26,32 +26,30 @@ CORE ESP32 核心板带有两个按键，其中 BOOT 按键可实现 BOOT 下载
 stateDiagram-v2
 
 [*] --> init
-init --> connecting_states
+init --> idle
 
-state connecting_states {
-    idle
-    reconnect
-    pairing
-    connected
+idle
+reconnect
+pairing
+connected
 
-    [*] --> idle
-    idle --> reconnect : has device connected before
-    idle --> pairing: loog press boot key
-    reconnect --> reconnect : timeout
-    reconnect --> pairing: loog press boot key
-    pairing --> reconnect: device connect failed
-    pairing --> reconnect: timeout (60s)
-    pairing --> connected: device connect success
-    connected --> pairing: loog press boot key
-    connected --> reconnect: device disconnect
-}
+idle --> reconnect : has device connected before
+idle --> pairing: long press boot key
+reconnect --> reconnect : timeout
+reconnect --> pairing: long press boot key
+pairing --> reconnect: device connect failed
+pairing --> reconnect: timeout (60s)
+pairing --> connected: device connect success
+connected --> pairing: long press boot key
+connected --> reconnect: device disconnect
+
 
 state connected {
-    mouse_moiton_disable
-    mouse_moiton_enable
+    mouse_motion_disable
+    mouse_motion_enable
 
-    mouse_moiton_disable --> mouse_moiton_enable: short press boot key
-    mouse_moiton_enable --> mouse_moiton_disable: short press boot key
+    mouse_motion_disable --> mouse_motion_enable: short press boot key
+    mouse_motion_enable --> mouse_motion_disable: short press boot key
 }
 ```
 

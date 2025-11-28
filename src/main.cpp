@@ -54,13 +54,16 @@ int blinkCount = 0;
 class ServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) {
         deviceConnected = true;
-        Serial.println("设备已连接");
+        Serial.println("BLE设备已连接");
+        Serial.println("客户端数量: " + String(pServer->getConnectedCount()));
+        Serial.println("尝试发送DeviceConnected事件到状态机");
         BleMouseState::dispatch(DeviceConnected());
+        Serial.println("DeviceConnected事件已发送");
     }
 
     void onDisconnect(NimBLEServer* pServer) {
         deviceConnected = false;
-        Serial.println("设备已断开连接");
+        Serial.println("BLE设备已断开连接");
         BleMouseState::dispatch(DeviceDisconnected());
         // 重新开始广播
         NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
@@ -77,6 +80,8 @@ void setup() {
     
     // 初始化 BLE
     NimBLEDevice::init("ESP32C3 BLE Mouse");
+    // 设置BLE安全参数 用于HID设备
+    NimBLEDevice::setSecurityAuth(true, true, true);
     
     // 创建 BLE 服务器
     pServer = NimBLEDevice::createServer();
@@ -92,27 +97,42 @@ void setup() {
     
     // 设置鼠标输入特征
     inputMouse = hid->getInputReport(1); // Report ID 1 for Mouse
-    inputMouse->setCallbacks(nullptr);
+    // 设置输入报告回调，以便接收通知
+    // inputMouse->setCallbacks(new MouseReportCallbacks()); // 如果需要处理来自客户端的报告
     
     // 设置 HID 报告描述符
     hid->setReportMap((uint8_t*)hid_report_descriptor, sizeof(hid_report_descriptor));
     
-    // 开始服务
+    // 根据标准BLE HID设备要求配置
+    // 设置电池服务（可选，但有些设备会期望这个）
+    hid->setBatteryLevel(100); // 设置初始电池电量为100%
+    
+    // 启动HID服务
     hid->startServices();
     
     // 设置广播
     NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
     pAdvertising->setAppearance(HID_MOUSE);
     pAdvertising->addServiceUUID(hid->getHidService()->getUUID());
+    // 设置广播名称
+    pAdvertising->setName("ESP32C3 BLE Mouse");
     pAdvertising->start();
+    Serial.println("广播已启动，设备应可在手机上看到并连接");
+    Serial.println("当前广播状态：" + String(pAdvertising->isAdvertising() ? "正在广播" : "未广播"));
+    Serial.println("HID服务已启动，设备准备就绪");
     
     Serial.println("BLE 鼠标服务已启动");
+    Serial.println("服务器回调已设置，等待连接...");
     
     // 初始化状态机
+    Serial.println("启动状态机...");
     BleMouseState::start();
+    Serial.println("状态机已启动");
     
     // 发送初始化完成事件
+    Serial.println("发送初始化完成事件...");
     BleMouseState::dispatch(InitComplete());
+    Serial.println("初始化完成事件已发送");
 }
 
 void loop() {
@@ -149,6 +169,25 @@ void loop() {
             
             buttonPressStartTime = 0;
         }
+    }
+    
+    // 定期检查连接状态并手动触发状态转换（如果回调未被触发）
+    static unsigned long lastConnectionCheck = 0;
+    if (millis() - lastConnectionCheck > 1000) { // 每秒检查一次
+        int connectedCount = pServer ? pServer->getConnectedCount() : 0;
+        if (connectedCount > 0 && !deviceConnected) {
+            // 检测到连接但状态未更新，手动触发连接事件
+            Serial.println("检测到连接但回调未触发，手动触发DeviceConnected事件");
+            Serial.println("当前连接数: " + String(connectedCount));
+            deviceConnected = true;
+            BleMouseState::dispatch(DeviceConnected());
+        } else if (connectedCount == 0 && deviceConnected) {
+            // 检测到断开连接但状态未更新
+            Serial.println("检测到断开连接，手动触发DeviceDisconnected事件");
+            deviceConnected = false;
+            BleMouseState::dispatch(DeviceDisconnected());
+        }
+        lastConnectionCheck = millis();
     }
     
     // 处理配对模式的 LED 闪烁

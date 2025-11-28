@@ -39,6 +39,12 @@ public:
     void entry() override;
     void react(BootButtonLongPress const &) override;
     void react(BootButtonShortPress const &) override;
+    void react(DeviceConnected const &) override;
+    void react(DeviceDisconnected const &) override;
+    void react(ConnectionTimeout const &) override;
+    void react(PairingTimeout const &) override;
+    void react(ConnectionFailed const &) override;
+    void react(InitComplete const &) override;
 };
 
 class Reconnect : public BleMouseState {
@@ -74,14 +80,27 @@ private:
 class Connected : public BleMouseState {
 public:
     void entry() override;
+    void react(BootButtonShortPress const &) override;
     void react(BootButtonLongPress const &) override;
+    void react(DeviceConnected const &) override;
     void react(DeviceDisconnected const &) override;
+    void react(ConnectionTimeout const &) override;
+    void react(PairingTimeout const &) override;
+    void react(ConnectionFailed const &) override;
+    void react(InitComplete const &) override;
 };
 
 class MouseMotionDisable : public BleMouseState {
 public:
     void entry() override;
     void react(BootButtonShortPress const &) override;
+    void react(BootButtonLongPress const &) override;
+    void react(DeviceConnected const &) override;
+    void react(DeviceDisconnected const &) override;
+    void react(ConnectionTimeout const &) override;
+    void react(PairingTimeout const &) override;
+    void react(ConnectionFailed const &) override;
+    void react(InitComplete const &) override;
 };
 
 class MouseMotionEnable : public BleMouseState {
