@@ -20,6 +20,41 @@ CORE ESP32 核心板带有两个按键，其中 BOOT 按键可实现 BOOT 下载
 | BOOT     | GPIO9     | 当按下按键时，芯片进入下载模式 | 低电平有效 |
 | RST      |           | 当按下按键时，芯片复位         | 低电平有效 |
 
+## 状态切换
+
+```mermaid
+stateDiagram-v2
+
+[*] --> init
+init --> connecting_states
+
+state connecting_states {
+    idle
+    reconnect
+    pairing
+    connected
+
+    [*] --> idle
+    idle --> reconnect : has device connected before
+    idle --> pairing: loog press boot key
+    reconnect --> reconnect : timeout
+    reconnect --> pairing: loog press boot key
+    pairing --> reconnect: device connect failed
+    pairing --> reconnect: timeout (60s)
+    pairing --> connected: device connect success
+    connected --> pairing: loog press boot key
+    connected --> reconnect: device disconnect
+}
+
+state connected {
+    mouse_moiton_disable
+    mouse_moiton_enable
+
+    mouse_moiton_disable --> mouse_moiton_enable: short press boot key
+    mouse_moiton_enable --> mouse_moiton_disable: short press boot key
+}
+```
+
 ## 使用方法
 
 ### 启动
@@ -28,11 +63,11 @@ CORE ESP32 核心板带有两个按键，其中 BOOT 按键可实现 BOOT 下载
 
 ### 配对
 
-长按 BOOT 按键超过 5 秒进入蓝牙配对模式（LED D4、D5 每秒闪烁 3 次）。
+长按 BOOT 按键超过 5 秒进入蓝牙配对模式，此模式下 LED D4 和 LED D5 同步每秒闪烁 3 次。
 
 ### 重新连接
 
-启动和断开连接之后会自动尝试连接上次连接的蓝牙设备。连接中的时候 LED D4、D5 每秒闪烁 1 次。
+启动和断开连接之后会自动尝试连接上次连接的蓝牙设备，处于重连状态时 LED D4 和 LED D5 同步每秒闪烁 1 次。
 
 ### 开关鼠标动作
 
