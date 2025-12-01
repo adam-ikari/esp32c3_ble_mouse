@@ -6,8 +6,8 @@
 #include <NimBLEHIDDevice.h>
 
 // LED 引脚定义
-#define LED_D4_PIN 12  // 高电平有效
-#define LED_D5_PIN 13  // 高电平有效
+#define LED_D4_PIN 12 // 高电平有效
+#define LED_D5_PIN 13 // 高电平有效
 
 // 全局变量声明
 extern NimBLEServer *pServer;
@@ -20,167 +20,220 @@ extern bool ledState;
 extern int blinkCount;
 
 // 鼠标移动状态变量外部声明
-extern int8_t currentMomentumX;
-extern int8_t currentMomentumY;
-extern int8_t targetMomentumX;
-extern int8_t targetMomentumY;
-extern unsigned long momentumChangeTimer;
-extern unsigned int momentumChangeInterval;
+extern float currentVelocityX;
+extern float currentVelocityY;
+extern float targetVelocityX;
+extern float targetVelocityY;
+extern float moveAngle;
+extern float moveRadius;
+extern unsigned long lastMoveUpdate;
+extern unsigned long patternChangeTimer;
+extern unsigned int patternChangeInterval;
+extern int currentPattern;
+
+// 鼠标运动状态记忆外部声明
+extern bool rememberedMouseMotionState;
+
+// 安卓拖动问题修复变量外部声明
+extern bool lastWasMoving;
+extern unsigned long lastReleaseReportTime;
+extern const unsigned long RELEASE_REPORT_INTERVAL;
+
+// 移动和停顿控制变量外部声明
+extern bool isMoving;
+extern unsigned long movePhaseTimer;
+extern unsigned long pausePhaseTimer;
+extern unsigned int moveDuration;
+extern unsigned int pauseDuration;
+extern bool inMovePhase;
 
 // 定义静态成员
 float MouseMotionEnable::angle = 0;
 
 // Init状态实现
-void Init::entry() {
+void Init::entry()
+{
     Serial.println("进入初始化状态");
     // 初始化LED
     pinMode(LED_D4_PIN, OUTPUT);
     pinMode(LED_D5_PIN, OUTPUT);
     digitalWrite(LED_D4_PIN, LOW);
     digitalWrite(LED_D5_PIN, LOW);
-    
+
     // 初始化全局变量
     deviceConnected = false;
     buttonPressStartTime = 0;
     lastBlinkTime = 0;
     ledState = false;
     blinkCount = 0;
-    
+
     Serial.println("LED引脚初始化完成");
     Serial.println("全局变量初始化完成");
     Serial.println("等待初始化完成事件...");
 }
 
-void Init::react(InitComplete const &) {
+void Init::react(InitComplete const &)
+{
     Serial.println("接收到初始化完成事件，检查是否需要重新连接到已配对设备");
     // 根据设计，在初始化完成后先进入Reconnect状态尝试连接之前配对的设备
     transit<Reconnect>();
 }
 
 // Idle状态实现
-void Idle::entry() {
+void Idle::entry()
+{
     Serial.println("进入空闲状态 - 设备可被发现和连接");
     digitalWrite(LED_D4_PIN, LOW);
     digitalWrite(LED_D5_PIN, LOW);
-    
+
     // 确保设备处于可被发现状态
-    if (pServer) {
+    if (pServer)
+    {
         NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
-        if (!pAdvertising->isAdvertising()) {
+        if (!pAdvertising->isAdvertising())
+        {
             pAdvertising->start();
             Serial.println("启动广播，设备现在可被发现");
-        } else {
+        }
+        else
+        {
             Serial.println("广播已在运行");
         }
     }
-    
+
     // 检查是否已有连接的设备
-    if (pServer && pServer->getConnectedCount() > 0) {
+    if (pServer && pServer->getConnectedCount() > 0)
+    {
         Serial.println("检测到已有连接的设备，发送DeviceConnected事件");
         BleMouseState::dispatch(DeviceConnected());
-    } else {
+    }
+    else
+    {
         Serial.println("空闲状态下设备可被连接...");
         Serial.println("等待已配对设备自动连接或新设备连接...");
     }
 }
 
-void Idle::react(BootButtonLongPress const &) {
-    Serial.println("在空闲状态下长按按钮，切换到配对状态");
+void Idle::react(BootButtonLongPress const &)
+{
+    Serial.println("长按按钮，进入配对模式");
     transit<Pairing>();
 }
 
-void Idle::react(BootButtonShortPress const &) {
+void Idle::react(BootButtonShortPress const &)
+{
     Serial.println("在空闲状态下短按按钮，无操作");
     // 在空闲状态下短按无效
 }
 
-void Idle::react(DeviceConnected const &) {
+void Idle::react(DeviceConnected const &)
+{
     Serial.println("在空闲状态下设备已连接，切换到连接状态");
     transit<Connected>();
+    // 进入Connected状态后立即触发状态恢复事件
+    BleMouseState::dispatch(RestoreMouseMotionState());
 }
 
-void Idle::react(DeviceDisconnected const &) {
-    Serial.println("在空闲状态下设备断开连接，保持空闲状态");
-    // 保持在当前状态
+void Idle::react(DeviceDisconnected const &)
+{
+    Serial.println("设备断开连接，进入重连模式");
+    transit<Reconnect>();
 }
 
-void Idle::react(ConnectionTimeout const &) {
+void Idle::react(ConnectionTimeout const &)
+{
     Serial.println("在空闲状态下连接超时，保持空闲状态");
     // 保持在当前状态
 }
 
-void Idle::react(PairingTimeout const &) {
+void Idle::react(PairingTimeout const &)
+{
     Serial.println("在空闲状态下配对超时，保持空闲状态");
     // 保持在当前状态
 }
 
-void Idle::react(ConnectionFailed const &) {
+void Idle::react(ConnectionFailed const &)
+{
     Serial.println("在空闲状态下连接失败，保持空闲状态");
     // 保持在当前状态
 }
 
-void Idle::react(InitComplete const &) {
+void Idle::react(InitComplete const &)
+{
     Serial.println("在空闲状态下接收到初始化完成事件，保持空闲状态");
     // 保持在当前状态
 }
 
 // Reconnect状态实现
-void Reconnect::entry() {
+void Reconnect::entry()
+{
     Serial.println("进入重连状态 - 尝试连接之前配对的设备");
     digitalWrite(LED_D4_PIN, LOW);
     digitalWrite(LED_D5_PIN, LOW);
     reconnectStartTime = millis();
-    
+
     // 确保广播是开启的，以便已配对设备可以连接
-    if (pServer) {
+    if (pServer)
+    {
         NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
-        if (!pAdvertising->isAdvertising()) {
+        if (!pAdvertising->isAdvertising())
+        {
             pAdvertising->start();
             Serial.println("启动广播以等待已配对设备连接");
         }
     }
-    
+
     // 开始重连逻辑
     startReconnection();
 }
 
-void Reconnect::react(DeviceConnected const &) {
+void Reconnect::react(DeviceConnected const &)
+{
     Serial.println("在重连状态下设备已连接，切换到连接状态");
     transit<Connected>();
+    // 进入Connected状态后立即触发状态恢复事件
+    BleMouseState::dispatch(RestoreMouseMotionState());
 }
 
-void Reconnect::react(BootButtonLongPress const &) {
-    Serial.println("在重连状态下长按按钮，切换到配对状态");
+void Reconnect::react(BootButtonLongPress const &)
+{
+    Serial.println("长按按钮，进入配对模式");
     transit<Pairing>();
 }
 
-void Reconnect::react(ConnectionTimeout const &) {
+void Reconnect::react(ConnectionTimeout const &)
+{
     Serial.println("重连超时，继续尝试重连");
     // 重连超时，继续尝试
     startReconnection();
 }
 
-void Reconnect::react(ConnectionFailed const &) {
+void Reconnect::react(ConnectionFailed const &)
+{
     Serial.println("连接失败，继续尝试连接");
     // 连接失败，继续尝试
     startReconnection();
 }
 
-void Reconnect::startReconnection() {
+void Reconnect::startReconnection()
+{
     Serial.println("尝试重新连接到之前配对的设备...");
     // 在BLE HID设备中，通常我们只需要保持广播开启
     // 已配对的设备会自动尝试连接
     // 也可以考虑特定的重新连接逻辑
 }
 
-void Reconnect::checkTimeout() {
-    if (millis() - reconnectStartTime > Reconnect::RECONNECT_TIMEOUT) {
+void Reconnect::checkTimeout()
+{
+    if (millis() - reconnectStartTime > Reconnect::RECONNECT_TIMEOUT)
+    {
         BleMouseState::dispatch(ConnectionTimeout());
     }
 }
 
 // Pairing状态实现
-void Pairing::entry() {
+void Pairing::entry()
+{
     Serial.println("进入配对状态");
     digitalWrite(LED_D4_PIN, LOW);
     digitalWrite(LED_D5_PIN, LOW);
@@ -188,50 +241,68 @@ void Pairing::entry() {
     blinkCount = 0;
     lastBlinkTime = millis();
     ledState = false;
-    
+
     // 确保设备处于可被发现状态，允许新设备配对连接
-    if (pServer) {
+    if (pServer)
+    {
         NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
-        if (pAdvertising->isAdvertising()) {
+        if (pAdvertising->isAdvertising())
+        {
             pAdvertising->stop();
             delay(100);
         }
         // 重新启动广播以允许新的配对请求
         pAdvertising->start();
         Serial.println("广播已启动，设备进入配对模式");
-    } else {
+    }
+    else
+    {
         Serial.println("错误：pServer为nullptr，无法启动广播");
     }
-    
+
     // 重新开始BLE广播
     startPairing();
 }
 
-void Pairing::react(DeviceConnected const &) {
+void Pairing::react(DeviceConnected const &)
+{
     Serial.println("在配对状态下设备已连接，切换到连接状态");
     transit<Connected>();
+    // 进入Connected状态后立即触发状态恢复事件
+    BleMouseState::dispatch(RestoreMouseMotionState());
 }
 
-void Pairing::react(BootButtonLongPress const &) {
-    Serial.println("在配对状态下长按按钮，无操作");
-    // 在配对状态下长按无效
+void Pairing::react(BootButtonLongPress const &)
+{
+    Serial.println("长按按钮，保持在配对模式");
+    // 已经在配对模式，保持当前状态
 }
 
-void Pairing::react(PairingTimeout const &) {
-    Serial.println("配对超时，切换到重连状态");
+void Pairing::react(DeviceDisconnected const &)
+{
+    Serial.println("设备断开连接，进入重连模式");
     transit<Reconnect>();
 }
 
-void Pairing::react(ConnectionFailed const &) {
-    Serial.println("配对连接失败，切换到重连状态");
+void Pairing::react(PairingTimeout const &)
+{
+    Serial.println("配对超时，进入重连模式");
     transit<Reconnect>();
 }
 
-void Pairing::startPairing() {
+void Pairing::react(ConnectionFailed const &)
+{
+    Serial.println("配对连接失败，进入重连模式");
+    transit<Reconnect>();
+}
+
+void Pairing::startPairing()
+{
     Serial.println("开始蓝牙配对...");
     Serial.println("确保BLE广播正在运行...");
     // 重新开始BLE广播
-    if (pServer) {
+    if (pServer)
+    {
         NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
         Serial.println("停止当前广播...");
         pAdvertising->stop();
@@ -239,158 +310,227 @@ void Pairing::startPairing() {
         Serial.println("启动新的广播...");
         pAdvertising->start();
         Serial.println("广播已启动，等待连接...");
-    } else {
+    }
+    else
+    {
         Serial.println("错误：pServer为nullptr");
     }
 }
 
-void Pairing::checkTimeout() {
-    if (millis() - pairingStartTime > Pairing::PAIRING_TIMEOUT) {
+void Pairing::checkTimeout()
+{
+    if (millis() - pairingStartTime > Pairing::PAIRING_TIMEOUT)
+    {
         BleMouseState::dispatch(PairingTimeout());
     }
 }
 
 // Connected状态实现
-void Connected::entry() {
-    Serial.println("进入连接状态 - LED常亮（鼠标移动功能处于禁用状态）");
-    // LED常亮表示已连接，鼠标移动功能初始处于禁用状态
+void Connected::entry()
+{
+    Serial.println("进入连接状态 - LED常亮");
+    // LED常亮表示已连接
     digitalWrite(LED_D4_PIN, HIGH);
     digitalWrite(LED_D5_PIN, HIGH);
-    // 连接后默认LED常亮，表示在Connected状态但鼠标移动功能禁用
-    // 用户可以通过短按按钮切换到鼠标移动启用状态
-    
+
     // 确保广播已停止，因为我们已经连接了
-    if (pServer) {
+    if (pServer)
+    {
         NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
-        if (pAdvertising->isAdvertising()) {
+        if (pAdvertising->isAdvertising())
+        {
             pAdvertising->stop();
             Serial.println("设备已连接，停止广播");
         }
     }
-    
-    Serial.println("连接状态设置完成，鼠标移动功能当前禁用");
+
+    Serial.println("连接状态设置完成");
 }
 
-void Connected::react(BootButtonShortPress const &) {
+void Connected::react(BootButtonShortPress const &)
+{
     Serial.println("在连接状态下短按按钮，切换到鼠标移动启用状态");
     // 短按切换到鼠标移动启用状态
     transit<MouseMotionEnable>();
 }
 
-void Connected::react(BootButtonLongPress const &) {
-    Serial.println("在连接状态下长按按钮，返回配对模式");
-    // 长按返回配对模式
+void Connected::react(BootButtonLongPress const &)
+{
+    Serial.println("长按按钮，进入配对模式");
     transit<Pairing>();
 }
 
-void Connected::react(DeviceConnected const &) {
+void Connected::react(DeviceConnected const &)
+{
     // 设备已经连接，保持当前状态
     Serial.println("接收到设备已连接事件，保持连接状态");
 }
 
-void Connected::react(DeviceDisconnected const &) {
-    Serial.println("设备断开连接，返回重连状态");
+void Connected::react(DeviceDisconnected const &)
+{
+    Serial.println("设备断开连接，进入重连模式");
     transit<Reconnect>();
 }
 
-void Connected::react(ConnectionTimeout const &) {
+void Connected::react(ConnectionTimeout const &)
+{
     Serial.println("连接超时事件，保持连接状态");
     // 默认处理，不执行状态转换
 }
 
-void Connected::react(PairingTimeout const &) {
+void Connected::react(PairingTimeout const &)
+{
     Serial.println("配对超时事件，保持连接状态");
     // 默认处理，不执行状态转换
 }
 
-void Connected::react(ConnectionFailed const &) {
+void Connected::react(ConnectionFailed const &)
+{
     Serial.println("连接失败事件，保持连接状态");
     // 默认处理，不执行状态转换
 }
 
-void Connected::react(InitComplete const &) {
-    Serial.println("初始化完成事件，保持连接状态");
+void Connected::react(InitComplete const &)
+{
+    Serial.println("在连接状态下初始化完成，保持连接状态");
     // 默认处理，不执行状态转换
 }
 
+void Connected::react(RestoreMouseMotionState const &)
+{
+    if (rememberedMouseMotionState)
+    {
+        Serial.println("恢复鼠标运动启用状态");
+        transit<MouseMotionEnable>();
+    }
+    else
+    {
+        Serial.println("保持鼠标运动禁用状态");
+        transit<MouseMotionDisable>();
+    }
+}
+
 // MouseMotionDisable状态实现
-void MouseMotionDisable::entry() {
+void MouseMotionDisable::entry()
+{
     Serial.println("进入鼠标移动禁用状态");
     // LED常亮表示已连接，但鼠标移动功能禁用
     digitalWrite(LED_D4_PIN, HIGH);
     digitalWrite(LED_D5_PIN, HIGH);
-    
+
     // 确保鼠标报告不发送移动数据
-    if (inputMouse && deviceConnected) {
+    if (inputMouse && deviceConnected)
+    {
         uint8_t mouseReport[4] = {0, 0, 0, 0}; // 无移动的空报告
         inputMouse->setValue(mouseReport, sizeof(mouseReport));
     }
 }
 
-void MouseMotionDisable::react(BootButtonShortPress const &) {
+void MouseMotionDisable::react(BootButtonShortPress const &)
+{
     Serial.println("在鼠标移动禁用状态下短按按钮，切换到鼠标移动启用状态");
+    rememberedMouseMotionState = true; // 记住鼠标运动已启用
     transit<MouseMotionEnable>();
 }
 
-void MouseMotionDisable::react(BootButtonLongPress const &) {
-    Serial.println("在鼠标移动禁用状态下长按按钮，切换到配对模式");
+void MouseMotionDisable::react(BootButtonLongPress const &)
+{
+    Serial.println("长按按钮，进入配对模式");
     transit<Pairing>();
 }
 
-void MouseMotionDisable::react(DeviceConnected const &) {
+void MouseMotionDisable::react(DeviceConnected const &)
+{
     Serial.println("在鼠标移动禁用状态下接收到设备已连接事件，保持当前状态");
     // 默认处理，不执行状态转换
 }
 
-void MouseMotionDisable::react(DeviceDisconnected const &) {
-    Serial.println("在鼠标移动禁用状态下设备断开连接，切换到重连状态");
+void MouseMotionDisable::react(DeviceDisconnected const &)
+{
+    Serial.println("设备断开连接，进入重连模式");
     transit<Reconnect>();
 }
 
-void MouseMotionDisable::react(ConnectionTimeout const &) {
+void MouseMotionDisable::react(ConnectionTimeout const &)
+{
     Serial.println("在鼠标移动禁用状态下连接超时，保持当前状态");
     // 默认处理，不执行状态转换
 }
 
-void MouseMotionDisable::react(PairingTimeout const &) {
+void MouseMotionDisable::react(PairingTimeout const &)
+{
     Serial.println("在鼠标移动禁用状态下配对超时，保持当前状态");
     // 默认处理，不执行状态转换
 }
 
-void MouseMotionDisable::react(ConnectionFailed const &) {
+void MouseMotionDisable::react(ConnectionFailed const &)
+{
     Serial.println("在鼠标移动禁用状态下连接失败，保持当前状态");
     // 默认处理，不执行状态转换
 }
 
-void MouseMotionDisable::react(InitComplete const &) {
+void MouseMotionDisable::react(InitComplete const &)
+{
     Serial.println("在鼠标移动禁用状态下初始化完成，保持当前状态");
     // 默认处理，不执行状态转换
 }
 
 // MouseMotionEnable状态实现
-void MouseMotionEnable::entry() {
+void MouseMotionEnable::entry()
+{
     Serial.println("进入鼠标移动启用状态");
-    // 初始化鼠标移动参数
+    // 初始化自然移动参数
     angle = 0;
-    // 在main.cpp中初始化了全局变量，这里可以重置为初始值
-    currentMomentumX = 0;
-    currentMomentumY = 0;
-    targetMomentumX = 0;
-    targetMomentumY = 0;
-    momentumChangeTimer = millis();
-    momentumChangeInterval = 2000; // 每2秒改变一次动量方向
-    
-    Serial.println("鼠标随机动量移动模式已启动");
+    currentVelocityX = 0.0;
+    currentVelocityY = 0.0;
+    targetVelocityX = 0.0;
+    targetVelocityY = 0.0;
+    moveAngle = 0.0;
+    moveRadius = 10.0; // 增大初始移动幅度
+    lastMoveUpdate = millis();
+    patternChangeTimer = millis();
+    patternChangeInterval = 3000; // 每3秒改变移动模式
+    currentPattern = 0;           // 从随机漫步模式开始
+
+    // 初始化移动和停顿控制
+    isMoving = false;
+    inMovePhase = true; // 从移动阶段开始
+    movePhaseTimer = millis();
+    pausePhaseTimer = 0;
+    moveDuration = random(MIN_MOVE_DURATION, MAX_MOVE_DURATION);    // 随机移动时间
+    pauseDuration = random(MIN_PAUSE_DURATION, MAX_PAUSE_DURATION); // 随机停顿时间
+
+    // 初始化安卓拖动问题修复变量
+    lastWasMoving = false;
+    lastReleaseReportTime = 0;
+
+    Serial.println("自然鼠标移动模式已启动，初始移动时长: " + String(moveDuration) + "ms");
 }
 
-void MouseMotionEnable::react(BootButtonShortPress const &) {
+void MouseMotionEnable::react(BootButtonLongPress const &)
+{
+    Serial.println("长按按钮，进入配对模式");
+    transit<Pairing>();
+}
+
+void MouseMotionEnable::react(BootButtonShortPress const &)
+{
     Serial.println("在鼠标移动启用状态下短按按钮，切换到鼠标移动禁用状态");
+    rememberedMouseMotionState = false; // 记住鼠标运动已禁用
     transit<MouseMotionDisable>();
 }
 
-namespace tinyfsm {
-  template<> 
-  void Fsm<BleMouseState>::set_initial_state(void) {
-    current_state_ptr = &_state_instance<Init>::value;
-  }
+void MouseMotionEnable::react(DeviceDisconnected const &)
+{
+    Serial.println("设备断开连接，进入重连模式");
+    transit<Reconnect>();
+}
+
+namespace tinyfsm
+{
+    template <>
+    void Fsm<BleMouseState>::set_initial_state(void)
+    {
+        current_state_ptr = &_state_instance<Init>::value;
+    }
 }
