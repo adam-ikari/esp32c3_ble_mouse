@@ -5,6 +5,7 @@
 #include <NimBLEUtils.h>
 #include <NimBLEHIDDevice.h>
 #include "state_machine.h"
+#include "../include/led_controller.h"
 
 // 按键引脚定义
 #define BOOT_BUTTON_PIN 9  // BOOT 按键，低电平有效
@@ -46,9 +47,6 @@ NimBLEHIDDevice *hid = nullptr;
 NimBLECharacteristic *inputMouse = nullptr;
 bool deviceConnected = false;
 unsigned long buttonPressStartTime = 0;
-unsigned long lastBlinkTime = 0;
-bool ledState = false;
-int blinkCount = 0;
 
 // 鼠标移动状态变量
 int8_t currentMomentumX = 0;
@@ -57,6 +55,11 @@ int8_t targetMomentumX = 0;
 int8_t targetMomentumY = 0;
 unsigned long momentumChangeTimer = 0;
 unsigned int momentumChangeInterval = 2000; // 每2秒改变一次动量方向
+
+// LED 控制变量
+unsigned long lastBlinkTime = 0;
+bool ledState = false;
+int blinkCount = 0;
 
 // 回调类：连接状态改变
 class ServerCallbacks: public NimBLEServerCallbacks {
@@ -82,6 +85,11 @@ class ServerCallbacks: public NimBLEServerCallbacks {
 void setup() {
     Serial.begin(115200);
     Serial.println("ESP32C3 BLE Mouse 启动中...");
+    
+    // 初始化LED控制器
+    LEDController::init();
+    LEDController::setMode(LEDController::Mode::OFF);
+    Serial.println("LED控制器已初始化");
     
     // 初始化随机数生成器
     randomSeed(analogRead(0) + millis());
